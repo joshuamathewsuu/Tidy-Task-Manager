@@ -1,195 +1,109 @@
-document.addEventListener("DOMContentLoaded", async () => {
-  // Configuration
-  const SUPABASE_URL = "https://your-supabase-url.supabase.co";
-  const SUPABASE_ANON_KEY = "your-supabase-anon-key";
-  const OPENAI_API_KEY = "your-openai-api-key";
-  const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let currentColumn = "";
+let currentTaskId = null;
 
-  // Auth Integration using Clerk
-  Clerk.load();
-  let currentUser = null;
 
-  Clerk.onReady(async () => {
-    const user = await Clerk.user;
-    currentUser = user;
-    if (!currentUser) {
-      window.location.href = "/sign-in"; // Redirect if not authenticated
-    } else {
-      document.querySelector("#user-name").textContent = `Welcome, ${user.firstName}!`;
-      loadBoardState();
+function generateTaskId() {
+    return 'task-' + Math.random().toString(36).substr(2, 9);
+}
+
+
+function showTaskForm(column) {
+    currentColumn = column;
+    document.getElementById("task-form-modal").style.display = "flex";
+    document.getElementById("task-title").value = "";
+    document.getElementById("task-date").value = "";
+    currentTaskId = null;
+}
+
+
+function closeTaskForm() {
+    document.getElementById("task-form-modal").style.display = "none";
+}
+
+
+function addTask() {
+    const title = document.getElementById("task-title").value;
+    const dueDate = document.getElementById("task-date").value;
+
+    if (!title) {
+        alert("Task title is required!");
+        return;
     }
-  });
 
-  // Selectors
-  const board = document.querySelector(".board");
-  const modal = document.querySelector(".modal");
-  const taskForm = document.querySelector("#task-form");
-  const cancelModalBtn = document.querySelector("#cancel-modal-btn");
-  const suggestTaskBtn = document.querySelector("#suggest-task-btn");
-
-  // Helper Functions
-  function showLoader(isLoading, element) {
-    element.disabled = isLoading;
-    element.textContent = isLoading ? "Loading..." : element.dataset.originalText || "Submit";
-  }
-
-  function createTask(title, dueDate) {
-    const task = document.createElement("div");
-    task.className = "task";
-    task.innerHTML = `
-      <div>
-        <h3>${title}</h3>
-        <p>Due: ${dueDate}</p>
-      </div>
-      <button class="delete-btn">×</button>
+    const taskId = currentTaskId || generateTaskId();
+    const taskElement = document.createElement("div");
+    taskElement.classList.add("task");
+    taskElement.setAttribute("draggable", "true");
+    taskElement.setAttribute("data-id", taskId);
+    taskElement.innerHTML = `
+        <span class="task-title">${title}</span>
+        <div class="date">${dueDate ? `Due: ${dueDate}` : "No due date"}</div>
+        <button onclick="editTask('${taskId}')">Edit</button>
+        <button onclick="deleteTask('${taskId}')">Delete</button>
+        <button onclick="markComplete('${taskId}')">Mark as Complete</button>
     `;
-    task.setAttribute("draggable", true);
-    return task;
-  }
 
-  function updateTaskCount(column) {
-    const count = column.querySelectorAll(".task").length;
-    column.querySelector(".task-count").textContent = count;
-  }
 
-  async function saveBoardState() {
-    const boardState = {};
-    document.querySelectorAll(".column").forEach((column) => {
-      const columnId = column.id;
-      const tasks = Array.from(column.querySelectorAll(".task")).map((task) => ({
-        title: task.querySelector("h3").textContent,
-        dueDate: task.querySelector("p").textContent.replace("Due: ", ""),
-      }));
-      boardState[columnId] = tasks;
-    });
-    await supabase.from("kanban").upsert({
-      user_id: currentUser.id,
-      board_state: boardState,
-    });
-  }
-
-  async function loadBoardState() {
-    const { data, error } = await supabase.from("kanban").select("board_state").eq("user_id", currentUser.id).single();
-    if (error) {
-      console.error("Error loading board:", error.message);
-      return;
+    if (currentColumn === "todo") {
+        document.getElementById("todo-tasks").appendChild(taskElement);
+    } else if (currentColumn === "in-progress") {
+        document.getElementById("in-progress-tasks").appendChild(taskElement);
+    } else if (currentColumn === "completed") {
+        document.getElementById("completed-tasks").appendChild(taskElement);
     }
-    const boardState = data?.board_state || {};
-    Object.keys(boardState).forEach((columnId) => {
-      const column = document.getElementById(columnId);
-      const tasksContainer = column.querySelector(".tasks");
-      boardState[columnId].forEach(({ title, dueDate }) => {
-        const task = createTask(title, dueDate);
-        tasksContainer.appendChild(task);
-      });
-      updateTaskCount(column);
-    });
-    enableDragAndDrop();
-  }
 
-  async function getTaskSuggestions() {
-    try {
-      showLoader(true, suggestTaskBtn);
-      const response = await fetch("https://api.openai.com/v1/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "text-davinci-003",
-          prompt: "Suggest 3 simple tasks for a team to accomplish today.",
-          max_tokens: 100,
-        }),
-      });
-      const data = await response.json();
-      const suggestions = data.choices[0]?.text.trim().split("\n").map((s) => s.trim());
-      suggestions.forEach((suggestion) => {
-        const task = createTask(suggestion, "No due date");
-        document.querySelector("#draft .tasks").appendChild(task);
-      });
-      updateTaskCount(document.querySelector("#draft"));
-    } catch (error) {
-      console.error("Error fetching AI suggestions:", error);
-    } finally {
-      showLoader(false, suggestTaskBtn);
+    closeTaskForm();
+}
+
+
+function editTask(taskId) {
+    const taskElement = document.querySelector(`[data-id="${taskId}"]`);
+    document.getElementById("task-title").value = taskElement.querySelector(".task-title").textContent;
+    const dateText = taskElement.querySelector(".date").textContent;
+    document.getElementById("task-date").value = dateText.includes("Due:") ? dateText.replace('Due: ', '') : '';
+    currentTaskId = taskId;
+    showTaskForm(currentColumn);
+}
+
+
+function deleteTask(taskId) {
+    const taskElement = document.querySelector(`[data-id="${taskId}"]`);
+    taskElement.remove();
+}
+
+
+function markComplete(taskId) {
+    const taskElement = document.querySelector(`[data-id="${taskId}"]`);
+    taskElement.classList.toggle("complete");
+}
+
+
+document.addEventListener("dragstart", function (e) {
+    if (e.target.classList.contains("task")) {
+        e.dataTransfer.setData("taskId", e.target.getAttribute("data-id"));
     }
-  }
+});
 
-  // Event Listeners
-  board.addEventListener("click", (e) => {
-    if (e.target.closest(".add-task-btn")) {
-      modal.classList.add("active");
-      modal.dataset.column = e.target.closest(".column").id;
-    }
-  });
-
-  cancelModalBtn.addEventListener("click", () => {
-    modal.classList.remove("active");
-  });
-
-  taskForm.addEventListener("submit", async (e) => {
+document.addEventListener("dragover", function (e) {
     e.preventDefault();
-    const title = document.querySelector("#task-title").value;
-    const dueDate = document.querySelector("#task-due-date").value;
-    const columnId = modal.dataset.column;
-
-    const task = createTask(title, dueDate);
-    document.querySelector(`#${columnId} .tasks`).appendChild(task);
-    modal.classList.remove("active");
-    taskForm.reset();
-    updateTaskCount(document.getElementById(columnId));
-    await saveBoardState();
-    enableDragAndDrop();
-  });
-
-  board.addEventListener("click", (e) => {
-    if (e.target.classList.contains("delete-btn")) {
-      const task = e.target.closest(".task");
-      const column = task.closest(".column");
-      task.remove();
-      updateTaskCount(column);
-      saveBoardState();
+    if (e.target.classList.contains("column")) {
+        e.target.style.background = "#555";
     }
-  });
+});
 
-  suggestTaskBtn.addEventListener("click", getTaskSuggestions);
+document.addEventListener("dragleave", function (e) {
+    if (e.target.classList.contains("column")) {
+        e.target.style.background = "";
+    }
+});
 
-  // Drag-and-Drop
-  function enableDragAndDrop() {
-    const tasks = document.querySelectorAll(".task");
-    const columns = document.querySelectorAll(".tasks");
-
-    tasks.forEach((task) => {
-      task.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("text/plain", task.outerHTML);
-        task.classList.add("dragging");
-      });
-
-      task.addEventListener("dragend", () => {
-        task.classList.remove("dragging");
-      });
-    });
-
-    columns.forEach((column) => {
-      column.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        const draggingTask = document.querySelector(".dragging");
-        column.appendChild(draggingTask);
-      });
-
-      column.addEventListener("drop", async (e) => {
-        e.preventDefault();
-        const draggingTask = document.querySelector(".dragging");
-        if (draggingTask) {
-          column.appendChild(draggingTask);
+document.addEventListener("drop", function (e) {
+    if (e.target.classList.contains("column")) {
+        const taskId = e.dataTransfer.getData("taskId");
+        const taskElement = document.querySelector(`[data-id="${taskId}"]`);
+        if (taskElement) {
+            e.target.appendChild(taskElement);
+            e.target.style.background = "";
         }
-        await saveBoardState();
-        enableDragAndDrop();
-      });
-    });
-  }
-
-  // Initialize
-  loadBoardState();
+    }
 });
